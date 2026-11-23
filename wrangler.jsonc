@@ -1,7 +1,7 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "clubchess",
-  "compatibility_date": "2026-11-24",
+  "compatibility_date": "2026-08-15",
   "main": "src/worker/index.ts",
   "assets": {
     "not_found_handling": "single-page-application",
