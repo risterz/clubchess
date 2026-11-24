@@ -61,7 +61,7 @@ export class MultiplayerSession implements GameSession {
   }
 
   private emit(): void {
-    const snap = { ...this.state };
+    const snap = this.state;
     for (const l of this.listeners) l(snap);
   }
 
@@ -73,7 +73,10 @@ export class MultiplayerSession implements GameSession {
     }
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const url = `${proto}//${window.location.host}/ws/room/${encodeURIComponent(this.options.roomId)}`;
-    this.state.connectionStatus = this.reconnectAttempt === 0 ? 'connecting' : 'reconnecting';
+    this.state = {
+      ...this.state,
+      connectionStatus: this.reconnectAttempt === 0 ? 'connecting' : 'reconnecting',
+    };
     this.emit();
 
     const ws = new WebSocket(url);
@@ -82,8 +85,11 @@ export class MultiplayerSession implements GameSession {
     ws.onopen = () => {
       if (this.ws !== ws || this.disposed) return;
       this.reconnectAttempt = 0;
-      this.state.connectionStatus = 'connected';
-      this.state.errorMessage = null;
+      this.state = {
+        ...this.state,
+        connectionStatus: 'connected',
+        errorMessage: null,
+      };
       const seatToken = getSeatToken(this.options.roomId);
       this.send({ type: 'join', name: this.options.playerName, ...(seatToken ? { seatToken } : {}) });
       this.emit();
@@ -116,7 +122,10 @@ export class MultiplayerSession implements GameSession {
     const base = Math.min(10_000, 500 * 2 ** this.reconnectAttempt);
     const jitter = Math.floor(Math.random() * 250);
     this.reconnectAttempt++;
-    this.state.connectionStatus = 'reconnecting';
+    this.state = {
+      ...this.state,
+      connectionStatus: 'reconnecting',
+    };
     this.emit();
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
@@ -130,7 +139,7 @@ export class MultiplayerSession implements GameSession {
         if (msg.seatToken) {
           saveSeatToken(this.options.roomId, msg.seatToken);
         }
-        if (msg.status === 'active' && msg.moves.length === 0) {
+        if (msg.status !== 'finished') {
           this.recordedGameEnd = false;
         }
         this.state = {
@@ -138,13 +147,16 @@ export class MultiplayerSession implements GameSession {
           timeControl: msg.timeControl,
           status: msg.status,
           fen: msg.fen,
-          moves: msg.moves,
-          clocks: msg.clocks,
-          players: msg.players,
+          moves: [...msg.moves],
+          clocks: { ...msg.clocks },
+          players: {
+            w: msg.players.w ? { ...msg.players.w } : null,
+            b: msg.players.b ? { ...msg.players.b } : null,
+          },
           yourRole: msg.yourRole,
           drawOfferBy: msg.drawOfferBy,
-          rematchBy: msg.rematchBy,
-          result: msg.result,
+          rematchBy: [...msg.rematchBy],
+          result: msg.result ? { ...msg.result } : null,
           errorMessage: null,
           clockOffsetMs: msg.serverNow - Date.now(),
         };
@@ -156,10 +168,10 @@ export class MultiplayerSession implements GameSession {
           ...this.state,
           fen: msg.move.fen,
           moves: [...this.state.moves, msg.move],
-          clocks: msg.clocks,
+          clocks: { ...msg.clocks },
           drawOfferBy: null,
           status: msg.result ? 'finished' : this.state.status,
-          result: msg.result ?? this.state.result,
+          result: msg.result ? { ...msg.result } : this.state.result,
           clockOffsetMs: msg.serverNow - Date.now(),
         };
         this.emit();
@@ -194,7 +206,7 @@ export class MultiplayerSession implements GameSession {
         break;
 
       case 'rematch_updated':
-        this.state = { ...this.state, rematchBy: msg.rematchBy };
+        this.state = { ...this.state, rematchBy: [...msg.rematchBy] };
         this.emit();
         break;
 
@@ -202,8 +214,8 @@ export class MultiplayerSession implements GameSession {
         this.state = {
           ...this.state,
           status: 'finished',
-          clocks: msg.clocks,
-          result: msg.result,
+          clocks: { ...msg.clocks },
+          result: { ...msg.result },
           drawOfferBy: null,
           clockOffsetMs: msg.serverNow - Date.now(),
         };
@@ -221,7 +233,10 @@ export class MultiplayerSession implements GameSession {
         break;
 
       case 'pong':
-        this.state.clockOffsetMs = msg.serverNow - Date.now();
+        this.state = {
+          ...this.state,
+          clockOffsetMs: msg.serverNow - Date.now(),
+        };
         break;
     }
   }
@@ -239,6 +254,7 @@ export class MultiplayerSession implements GameSession {
   }
 
   makeMove(from: string, to: string, promotion?: PromotionPiece): boolean {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return false;
     if (this.state.status !== 'active' || this.state.yourRole === 'spectator') return false;
     const chess = new Chess(this.state.fen);
     if (chess.turn() !== this.state.yourRole) return false;

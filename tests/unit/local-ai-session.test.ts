@@ -134,4 +134,156 @@ describe('LocalAISession', () => {
     expect(session.getState().moves.map((m) => m.san)).toEqual(['e4', 'e5']);
     session.dispose();
   });
+
+  it('preserves clocks and avoids double deduction on illegal move attempts in timed games', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-11-24T12:00:00.000Z'));
+      let replyIndex = 0;
+      const replies = ['e7e5', 'b8c6'];
+      const engine = new StubEngine(async () => replies[replyIndex++] ?? null);
+      const session = new LocalAISession(
+        {
+          playerName: 'Ada',
+          playerColor: 'w',
+          difficulty: 'club',
+          timeControl: '5+0',
+        },
+        engine,
+      );
+
+      session.start();
+      // First move starts the clock without deducting from white
+      expect(session.makeMove('e2', 'e4')).toBe(true);
+      await vi.advanceTimersByTimeAsync(0);
+
+      const afterAiReply = session.getState();
+      expect(afterAiReply.moves.map((m) => m.san)).toEqual(['e4', 'e5']);
+      expect(afterAiReply.clocks.running).toBe(true);
+      const savedWMs = afterAiReply.clocks.wMs;
+      const savedBMs = afterAiReply.clocks.bMs;
+      const savedLastTickAt = afterAiReply.clocks.lastTickAt;
+
+      // Advance 5 seconds, then attempt an illegal move
+      vi.advanceTimersByTime(5_000);
+      expect(session.makeMove('e4', 'e8')).toBe(false);
+
+      const afterIllegal = session.getState();
+      expect(afterIllegal).toBe(afterAiReply);
+      expect(afterIllegal.clocks.wMs).toBe(savedWMs);
+      expect(afterIllegal.clocks.bMs).toBe(savedBMs);
+      expect(afterIllegal.clocks.lastTickAt).toBe(savedLastTickAt);
+
+      // Advance 3 more seconds (8s total since lastTickAt) and make a legal move
+      vi.advanceTimersByTime(3_000);
+      expect(session.makeMove('g1', 'f3')).toBe(true);
+
+      const afterLegal = session.getState();
+      expect(afterLegal.clocks.wMs).toBe(savedWMs - 8_000);
+      expect(afterLegal.clocks.bMs).toBe(savedBMs);
+      expect(afterLegal.clocks.lastTickAt).toBe(savedLastTickAt + 8_000);
+
+      session.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('sets errorMessage when AI returns null on an active turn and allows retryAi', async () => {
+    let returnNull = true;
+    const engine = new StubEngine(async () => {
+      if (returnNull) {
+        returnNull = false;
+        return null;
+      }
+      return 'e7e5';
+    });
+
+    const session = new LocalAISession(
+      {
+        playerName: 'Ada',
+        playerColor: 'w',
+        difficulty: 'club',
+        timeControl: 'unlimited',
+      },
+      engine,
+    );
+
+    session.start();
+    expect(session.makeMove('e2', 'e4')).toBe(true);
+
+    await new Promise((r) => setTimeout(r, 20));
+    const stalled = session.getState();
+    expect(stalled.isAiThinking).toBe(false);
+    expect(stalled.errorMessage).toBe('Engine returned no move — Retry');
+    expect(stalled.moves.map((m) => m.san)).toEqual(['e4']);
+
+    session.retryAi();
+    await new Promise((r) => setTimeout(r, 20));
+    const recovered = session.getState();
+    expect(recovered.isAiThinking).toBe(false);
+    expect(recovered.errorMessage).toBeNull();
+    expect(recovered.moves.map((m) => m.san)).toEqual(['e4', 'e5']);
+    session.dispose();
+  });
+
+  it('returns a new state reference from getState() on every state update without mutating prior snapshots', async () => {
+    let resolveAi!: (move: string | null) => void;
+    const engine = new StubEngine(
+      () =>
+        new Promise<string | null>((resolve) => {
+          resolveAi = resolve;
+        }),
+    );
+
+    const onGameEnd = vi.fn();
+    const session = new LocalAISession(
+      {
+        playerName: 'Ada',
+        playerColor: 'w',
+        difficulty: 'club',
+        timeControl: 'unlimited',
+        onGameEnd,
+      },
+      engine,
+    );
+
+    const observed: ReturnType<typeof session.getState>[] = [];
+    session.subscribe((s) => observed.push(s));
+
+    const initial = session.getState();
+    session.start();
+    expect(session.makeMove('e2', 'e4')).toBe(true);
+    const afterHumanMove = session.getState();
+    expect(afterHumanMove).not.toBe(initial);
+    expect(initial.moves).toEqual([]);
+    expect(afterHumanMove.isAiThinking).toBe(true);
+
+    resolveAi('e7e5');
+    await new Promise((r) => setTimeout(r, 20));
+    const afterAiMove = session.getState();
+    expect(afterAiMove).not.toBe(afterHumanMove);
+    expect(afterHumanMove.isAiThinking).toBe(true);
+    expect(afterAiMove.isAiThinking).toBe(false);
+
+    session.resign();
+    const finished = session.getState();
+    expect(finished).not.toBe(afterAiMove);
+    expect(finished.status).toBe('finished');
+    expect(onGameEnd).toHaveBeenCalledTimes(1);
+    const endSnapshot = onGameEnd.mock.calls[0][0];
+    expect(endSnapshot).toBe(finished);
+
+    session.requestRematch();
+    const rematched = session.getState();
+    expect(rematched).not.toBe(finished);
+    expect(endSnapshot.status).toBe('finished');
+    expect(endSnapshot.result).toEqual({ winner: 'b', reason: 'resignation' });
+
+    // Every emitted state is strictly distinct from the previous one
+    for (let i = 1; i < observed.length; i++) {
+      expect(observed[i]).not.toBe(observed[i - 1]);
+    }
+    session.dispose();
+  });
 });

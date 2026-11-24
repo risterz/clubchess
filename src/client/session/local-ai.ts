@@ -1,6 +1,6 @@
 import { Chess } from 'chess.js';
 import { computeRemainingMs, createInitialClock, resolveTimeoutResult } from '../../shared/clock';
-import type { Color, GameResult, PromotionPiece } from '../../shared/protocol';
+import type { ClockState, Color, GameResult, PromotionPiece } from '../../shared/protocol';
 import type { TimeControlId } from '../../shared/time-controls';
 import { AI_DIFFICULTIES, type AiDifficultyId, type AiEngine } from '../engine/stockfish';
 import { parseUciMove } from '../engine/uci-parser';
@@ -70,7 +70,7 @@ export class LocalAISession implements GameSession {
   }
 
   private emit(): void {
-    const snapshot = { ...this.state };
+    const snapshot = this.state;
     for (const l of this.listeners) l(snapshot);
   }
 
@@ -86,8 +86,12 @@ export class LocalAISession implements GameSession {
       const now = Date.now();
       const rem = computeRemainingMs(this.state.clocks, turn, now);
       if ((turn === 'w' ? rem.wMs : rem.bMs) <= 0) {
-        this.state.clocks = { ...this.state.clocks, ...rem, running: false, lastTickAt: now };
-        this.finish(resolveTimeoutResult(this.chess.fen(), turn));
+        this.finish(resolveTimeoutResult(this.chess.fen(), turn), {
+          ...this.state.clocks,
+          ...rem,
+          running: false,
+          lastTickAt: now,
+        });
       }
     }, 100);
   }
@@ -108,11 +112,16 @@ export class LocalAISession implements GameSession {
     const mover = this.chess.turn() as Color;
     const now = Date.now();
 
+    let rem: { wMs: number; bMs: number } | null = null;
     if (this.options.timeControl !== 'unlimited' && this.state.clocks.running) {
-      const rem = computeRemainingMs(this.state.clocks, mover, now);
-      this.state.clocks = { ...this.state.clocks, ...rem };
+      rem = computeRemainingMs(this.state.clocks, mover, now);
       if ((mover === 'w' ? rem.wMs : rem.bMs) <= 0) {
-        this.finish(resolveTimeoutResult(this.chess.fen(), mover));
+        this.finish(resolveTimeoutResult(this.chess.fen(), mover), {
+          ...this.state.clocks,
+          ...rem,
+          running: false,
+          lastTickAt: now,
+        });
         return false;
       }
     }
@@ -125,29 +134,39 @@ export class LocalAISession implements GameSession {
     }
     if (!move) return false;
 
+    let nextClocks = this.state.clocks;
     if (this.options.timeControl !== 'unlimited') {
-      const nextClocks = { ...this.state.clocks };
+      nextClocks = {
+        ...this.state.clocks,
+        ...(rem ?? {}),
+      };
       if (nextClocks.running) {
         if (mover === 'w') nextClocks.wMs += nextClocks.incrementMs;
         else nextClocks.bMs += nextClocks.incrementMs;
       }
       nextClocks.running = true;
       nextClocks.lastTickAt = now;
-      this.state.clocks = nextClocks;
     }
 
-    this.state.fen = this.chess.fen();
-    this.state.moves = [
+    const nextFen = this.chess.fen();
+    const nextMoves = [
       ...this.state.moves,
       {
         san: move.san,
         uci: `${move.from}${move.to}${move.promotion ?? ''}`,
-        fen: this.state.fen,
-        wMs: this.state.clocks.wMs,
-        bMs: this.state.clocks.bMs,
+        fen: nextFen,
+        wMs: nextClocks.wMs,
+        bMs: nextClocks.bMs,
       },
     ];
-    this.state.errorMessage = null;
+
+    this.state = {
+      ...this.state,
+      clocks: nextClocks,
+      fen: nextFen,
+      moves: nextMoves,
+      errorMessage: null,
+    };
 
     const result = this.detectFideEnd();
     if (result) {
@@ -169,29 +188,52 @@ export class LocalAISession implements GameSession {
 
   private async triggerAiTurn(): Promise<void> {
     const gen = ++this.turnGeneration;
-    this.state.isAiThinking = true;
-    this.state.errorMessage = null;
+    this.state = {
+      ...this.state,
+      isAiThinking: true,
+      errorMessage: null,
+    };
     this.emit();
 
     try {
       const best = await this.engine.getBestMove(this.chess.fen(), this.options.difficulty);
       if (gen !== this.turnGeneration || this.state.status !== 'active') return;
-      this.state.isAiThinking = false;
       if (!best) {
+        this.state = {
+          ...this.state,
+          isAiThinking: false,
+          errorMessage: 'Engine returned no move — Retry',
+        };
         this.emit();
         return;
       }
       const parsed = parseUciMove(best);
-      if (!parsed || !this.applyCheckedMove(parsed.from, parsed.to, parsed.promotion)) {
+      if (!parsed) {
+        this.state = {
+          ...this.state,
+          isAiThinking: false,
+          errorMessage: 'Engine returned illegal move — Retry',
+        };
+        this.emit();
+        return;
+      }
+      this.state = { ...this.state, isAiThinking: false };
+      if (!this.applyCheckedMove(parsed.from, parsed.to, parsed.promotion)) {
         if (this.state.status === 'active') {
-          this.state.errorMessage = 'Engine returned illegal move — Retry';
+          this.state = {
+            ...this.state,
+            errorMessage: 'Engine returned illegal move — Retry',
+          };
           this.emit();
         }
       }
     } catch {
-      if (gen !== this.turnGeneration) return;
-      this.state.isAiThinking = false;
-      this.state.errorMessage = 'Engine unresponsive — Retry';
+      if (gen !== this.turnGeneration || this.state.status !== 'active') return;
+      this.state = {
+        ...this.state,
+        isAiThinking: false,
+        errorMessage: 'Engine unresponsive — Retry',
+      };
       this.emit();
     }
   }
@@ -202,17 +244,21 @@ export class LocalAISession implements GameSession {
     }
   }
 
-  private finish(result: GameResult): void {
+  private finish(result: GameResult, clocks?: ClockState): void {
     this.turnGeneration++;
     if (this.timerId) {
       clearInterval(this.timerId);
       this.timerId = null;
     }
     this.engine.stop();
-    this.state.status = 'finished';
-    this.state.isAiThinking = false;
-    this.state.clocks = { ...this.state.clocks, running: false, lastTickAt: Date.now() };
-    this.state.result = result;
+    const nextClocks = clocks ?? { ...this.state.clocks, running: false, lastTickAt: Date.now() };
+    this.state = {
+      ...this.state,
+      status: 'finished',
+      isAiThinking: false,
+      clocks: nextClocks,
+      result,
+    };
     this.emit();
     this.options.onGameEnd?.(this.state, this.getPgn());
   }
