@@ -6,6 +6,8 @@ An editorial, realtime chess club built for instant play — online matchmaking,
 
 No accounts. No logins. No clutter. Just open a table and play.
 
+**Live Demo:** [clubchess.harisharraz02.workers.dev](https://clubchess.harisharraz02.workers.dev)
+
 ![ClubChess Match Arena — Walnut Club Dark Theme](docs/screenshots/arena-dark.png)
 
 ---
