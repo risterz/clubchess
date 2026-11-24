@@ -1,0 +1,102 @@
+@import "tailwindcss";
+
+:root,
+[data-theme="dark"] {
+  --bg-canvas: #161412;
+  --bg-surface: #1f1c19;
+  --bg-elevated: #2a2521;
+  --border-subtle: #3a332c;
+  --text-primary: #f4efe6;
+  --text-secondary: #b7ada0;
+  --accent-primary: #c89b54;
+  --accent-hover: #d8ae68;
+  --accent-contrast: #161412;
+  --danger: #d15b47;
+  --success: #6fa876;
+  --scrim: rgba(0, 0, 0, 0.56);
+
+  --piece-white-fill: #faf6ee;
+  --piece-white-stroke: #231f1c;
+  --piece-white-accent: #231f1c;
+  --piece-black-fill: #231f1c;
+  --piece-black-stroke: #120f0d;
+  --piece-black-accent: #eae3d6;
+  --piece-shadow: rgba(0, 0, 0, 0.28);
+
+  --sq-check: radial-gradient(
+    circle,
+    rgba(209, 91, 71, 0.78) 0%,
+    rgba(209, 91, 71, 0.35) 60%,
+    transparent 80%
+  );
+  --sq-legal-dot: rgba(22, 20, 18, 0.28);
+  --sq-legal-capture: rgba(22, 20, 18, 0.32);
+}
+
+[data-theme="light"] {
+  --bg-canvas: #f5f1ea;
+  --bg-surface: #ffffff;
+  --bg-elevated: #ece6dc;
+  --border-subtle: #ddd4c7;
+  --text-primary: #1c1916;
+  --text-secondary: #5f574e;
+  --accent-primary: #9a6e2a;
+  --accent-hover: #835c20;
+  --accent-contrast: #ffffff;
+  --danger: #b83b28;
+  --success: #2f7a3e;
+  --scrim: rgba(20, 16, 12, 0.48);
+}
+
+[data-board="walnut"] {
+  --sq-light: #efe3ce;
+  --sq-dark: #9e734e;
+  --sq-last: rgba(200, 155, 84, 0.42);
+  --sq-selected: rgba(200, 155, 84, 0.56);
+}
+
+[data-board="slate"] {
+  --sq-light: #e8e6e1;
+  --sq-dark: #6f7a74;
+  --sq-last: rgba(196, 168, 98, 0.42);
+  --sq-selected: rgba(196, 168, 98, 0.56);
+}
+
+[data-board="linen"] {
+  --sq-light: #eeeed2;
+  --sq-dark: #5f7a5b;
+  --sq-last: rgba(218, 198, 92, 0.46);
+  --sq-selected: rgba(218, 198, 92, 0.6);
+}
+
+body {
+  margin: 0;
+  min-height: 100dvh;
+  background-color: var(--bg-canvas);
+  color: var(--text-primary);
+  font-family: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+.font-editorial {
+  font-family: "Newsreader", Georgia, serif;
+}
+
+.font-mono-tabular {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+*:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
