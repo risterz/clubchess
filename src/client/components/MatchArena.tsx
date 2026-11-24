@@ -192,7 +192,7 @@ export function MatchArena({
           <button
             type="button"
             onClick={() => {
-              void navigator.clipboard.writeText(window.location.href);
+              void navigator.clipboard.writeText(window.location.href).catch(() => {});
               setCopiedLink(true);
               if (copyTimerRef.current !== null) clearTimeout(copyTimerRef.current);
               copyTimerRef.current = setTimeout(() => {
@@ -299,8 +299,8 @@ export function MatchArena({
             onResign={() => sessionRef.current?.resign()}
             onClaimAbandonment={() => sessionRef.current?.claimAbandonment()}
             onFlip={() => setFlipped((f) => !f)}
-            onCopyPgn={() => void navigator.clipboard.writeText(sessionRef.current?.getPgn() ?? '')}
-            onCopyFen={() => void navigator.clipboard.writeText(displayedFen)}
+            onCopyPgn={() => void navigator.clipboard.writeText(sessionRef.current?.getPgn() ?? '').catch(() => {})}
+            onCopyFen={() => void navigator.clipboard.writeText(displayedFen).catch(() => {})}
             onToggleSound={onToggleSound}
           />
 
@@ -328,7 +328,7 @@ export function MatchArena({
           onRematch={() => sessionRef.current?.requestRematch()}
           onNewGame={onReturnLobby}
           onReview={() => setDismissedModal(true)}
-          onCopyPgn={() => void navigator.clipboard.writeText(sessionRef.current?.getPgn() ?? '')}
+          onCopyPgn={() => void navigator.clipboard.writeText(sessionRef.current?.getPgn() ?? '').catch(() => {})}
         />
       )}
     </main>

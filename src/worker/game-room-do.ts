@@ -18,6 +18,7 @@ import { isTimeControlId, type TimeControlId } from '../shared/time-controls';
 import type { Env } from './env';
 
 const GRACE_PERIOD_MS = 60_000;
+const UNUSED_ROOM_TTL_MS = 5 * 60_000;
 const WAITING_CLEANUP_MS = 30 * 60_000;
 const FINISHED_CLEANUP_MS = 24 * 60 * 60_000;
 const WS_READY_STATE_OPEN = 1;
@@ -304,13 +305,21 @@ export class GameRoomDO extends DurableObject<Env> {
         moves: [],
         clocks: createInitialClock(body.timeControl, now),
         seats: {
-          w: { name: sanitizeDisplayName(body.whiteName), token: whiteToken, graceDeadlineAt: null },
-          b: { name: sanitizeDisplayName(body.blackName), token: blackToken, graceDeadlineAt: null },
+          w: {
+            name: sanitizeDisplayName(body.whiteName),
+            token: whiteToken,
+            graceDeadlineAt: now + GRACE_PERIOD_MS,
+          },
+          b: {
+            name: sanitizeDisplayName(body.blackName),
+            token: blackToken,
+            graceDeadlineAt: now + GRACE_PERIOD_MS,
+          },
         },
         drawOfferBy: null,
         rematchBy: [],
         result: null,
-        cleanupAt: null,
+        cleanupAt: now + UNUSED_ROOM_TTL_MS,
       };
       this.persist();
       await this.scheduleNextAlarm();
@@ -375,6 +384,10 @@ export class GameRoomDO extends DurableObject<Env> {
         }
         if (seat.graceDeadlineAt !== null) {
           seat.graceDeadlineAt = null;
+          stateChanged = true;
+        }
+        if (this.room.status === 'active' && this.room.cleanupAt !== null) {
+          this.room.cleanupAt = null;
           stateChanged = true;
         }
       } else if (this.room.status === 'waiting') {
@@ -650,7 +663,17 @@ export class GameRoomDO extends DurableObject<Env> {
       }
     }
 
-    if (this.room.cleanupAt !== null && now >= this.room.cleanupAt && this.room.status !== 'active') {
+    const isUnusedActiveRoom =
+      this.room.status === 'active' &&
+      this.room.moves.length === 0 &&
+      this.countSocketsForColor('w') === 0 &&
+      this.countSocketsForColor('b') === 0;
+
+    if (
+      this.room.cleanupAt !== null &&
+      now >= this.room.cleanupAt &&
+      (this.room.status !== 'active' || isUnusedActiveRoom)
+    ) {
       for (const ws of this.ctx.getWebSockets()) {
         try {
           ws.close(1000, 'Room expired');

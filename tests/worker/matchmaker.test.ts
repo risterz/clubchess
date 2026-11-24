@@ -81,6 +81,11 @@ describe('MatchmakerDO', () => {
       headers: { Upgrade: 'websocket' },
     });
     expect(badTc.status).toBe(400);
+
+    const badEncoding = await stub.fetch('https://internal/ws/queue/%E0%A4%A?name=Alice', {
+      headers: { Upgrade: 'websocket' },
+    });
+    expect(badEncoding.status).toBe(400);
   });
 
   it('routes /ws/queue/:tc through the Worker edge router and pairs players', async () => {

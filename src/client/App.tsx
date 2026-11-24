@@ -36,9 +36,13 @@ function parseInitialRoute(savedGames: SavedGame[]): Route {
 
   const replayMatch = window.location.pathname.match(/^\/replay\/([^/]+)\/?$/);
   if (replayMatch) {
-    const id = decodeURIComponent(replayMatch[1]);
-    const found = savedGames.find((g) => g.id === id);
-    if (found) return { kind: 'replay', game: found };
+    try {
+      const id = decodeURIComponent(replayMatch[1]);
+      const found = savedGames.find((g) => g.id === id);
+      if (found) return { kind: 'replay', game: found };
+    } catch {
+      return { kind: 'lobby' };
+    }
   }
 
   return { kind: 'lobby' };
@@ -85,7 +89,7 @@ function ReplayView({ game, onBack }: { game: SavedGame; onBack: () => void }) {
         </button>
         <button
           type="button"
-          onClick={() => void navigator.clipboard.writeText(game.pgn)}
+          onClick={() => void navigator.clipboard.writeText(game.pgn).catch(() => {})}
           className="min-h-[44px] px-3.5 rounded-lg bg-[var(--bg-surface)] border border-[var(--border-subtle)] text-sm flex items-center gap-1.5 cursor-pointer"
         >
           <Copy className="w-4 h-4" strokeWidth={1.75} aria-hidden="true" /> Copy PGN

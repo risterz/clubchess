@@ -10,16 +10,27 @@ export default {
     const url = new URL(request.url);
 
     if (request.method === 'POST' && url.pathname === '/api/rooms') {
-      let body: { timeControl?: string; sidePref?: SidePref; name?: string } = {};
+      let rawBody: unknown;
       try {
-        body = (await request.json()) as typeof body;
+        rawBody = await request.json();
       } catch {
         return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
       }
+      if (typeof rawBody !== 'object' || rawBody === null || Array.isArray(rawBody)) {
+        return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
+      }
+      const body = rawBody as Record<string, unknown>;
+      if (body.name !== undefined && typeof body.name !== 'string') {
+        return Response.json({ error: 'Invalid display name' }, { status: 400 });
+      }
       const timeControl = body.timeControl ?? '5+0';
-      if (!isTimeControlId(timeControl)) {
+      if (typeof timeControl !== 'string' || !isTimeControlId(timeControl)) {
         return Response.json({ error: 'Unsupported time control' }, { status: 400 });
       }
+      const sidePref: SidePref =
+        body.sidePref === 'w' || body.sidePref === 'b' || body.sidePref === 'random'
+          ? body.sidePref
+          : 'random';
       const roomId = generateRoomId();
       const stub = env.GAME_ROOM.get(env.GAME_ROOM.idFromName(roomId));
       return stub.fetch('https://internal/init-private', {
@@ -27,8 +38,8 @@ export default {
         body: JSON.stringify({
           roomId,
           timeControl,
-          sidePref: body.sidePref ?? 'random',
-          name: sanitizeDisplayName(body.name),
+          sidePref,
+          name: sanitizeDisplayName(typeof body.name === 'string' ? body.name : ''),
         }),
       });
     }
@@ -55,7 +66,12 @@ export default {
 
     const wsQueueMatch = url.pathname.match(/^\/ws\/queue\/([^/]+)$/);
     if (wsQueueMatch) {
-      const tc = decodeURIComponent(wsQueueMatch[1]);
+      let tc: string;
+      try {
+        tc = decodeURIComponent(wsQueueMatch[1]);
+      } catch {
+        return new Response('Invalid time control', { status: 400 });
+      }
       if (!isTimeControlId(tc)) {
         return new Response('Invalid time control', { status: 400 });
       }

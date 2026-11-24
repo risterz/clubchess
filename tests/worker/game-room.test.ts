@@ -228,4 +228,113 @@ describe('GameRoomDO', () => {
     }
     ws.close();
   });
+
+  it('returns 400 for malformed POST /api/rooms bodies and malformed /ws/queue percent-encoding', async () => {
+    const nullBodyRes = await SELF.fetch('https://clubchess.example/api/rooms', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: 'null',
+    });
+    expect(nullBodyRes.status).toBe(400);
+
+    const arrayBodyRes = await SELF.fetch('https://clubchess.example/api/rooms', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '[]',
+    });
+    expect(arrayBodyRes.status).toBe(400);
+
+    const badNameRes = await SELF.fetch('https://clubchess.example/api/rooms', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 123 }),
+    });
+    expect(badNameRes.status).toBe(400);
+
+    const badEncodingRes = await SELF.fetch('https://clubchess.example/ws/queue/%E0%A4%A', {
+      headers: { Upgrade: 'websocket' },
+    });
+    expect(badEncodingRes.status).toBe(400);
+  });
+
+  it('seeds graceDeadlineAt on both seats in /init-matched and clears it on join', async () => {
+    const roomId = 'MATCH1';
+    const stub = env.GAME_ROOM.get(env.GAME_ROOM.idFromName(roomId));
+    const initRes = await stub.fetch('https://internal/init-matched', {
+      method: 'POST',
+      body: JSON.stringify({ roomId, timeControl: '5+0', whiteName: 'W', blackName: 'B' }),
+    });
+    expect(initRes.status).toBe(200);
+    const { whiteToken, blackToken } = (await initRes.json()) as {
+      whiteToken: string;
+      blackToken: string;
+    };
+
+    await runInDurableObject(stub, async (instance) => {
+      const internal = instance as unknown as {
+        room: {
+          seats: {
+            w: { graceDeadlineAt: number | null } | null;
+            b: { graceDeadlineAt: number | null } | null;
+          };
+          cleanupAt: number | null;
+        } | null;
+      };
+      expect(internal.room).not.toBeNull();
+      expect(internal.room!.seats.w?.graceDeadlineAt).toBeTypeOf('number');
+      expect(internal.room!.seats.b?.graceDeadlineAt).toBeTypeOf('number');
+      expect(internal.room!.cleanupAt).toBeTypeOf('number');
+    });
+
+    const p1 = await openRoomSocket(roomId);
+    p1.ws.send(JSON.stringify({ type: 'join', name: 'W', seatToken: whiteToken }));
+    const s1 = await p1.nextMessage();
+    expect(s1.type).toBe('room_state');
+    if (s1.type === 'room_state') {
+      expect(s1.players.w?.graceDeadlineAt).toBeNull();
+      expect(s1.players.b?.graceDeadlineAt).toBeTypeOf('number');
+    }
+
+    const p2 = await openRoomSocket(roomId);
+    p2.ws.send(JSON.stringify({ type: 'join', name: 'B', seatToken: blackToken }));
+    const s2 = await p2.nextMessage();
+    const s1Updated = await p1.nextMessage();
+    expect(s2.type).toBe('room_state');
+    expect(s1Updated.type).toBe('room_state');
+    if (s2.type === 'room_state') {
+      expect(s2.players.w?.graceDeadlineAt).toBeNull();
+      expect(s2.players.b?.graceDeadlineAt).toBeNull();
+    }
+
+    p1.ws.close();
+    p2.ws.close();
+  });
+
+  it('cleans up an unused matched room when alarm fires after cleanupAt', async () => {
+    const roomId = 'MATCH2';
+    const stub = env.GAME_ROOM.get(env.GAME_ROOM.idFromName(roomId));
+    const initRes = await stub.fetch('https://internal/init-matched', {
+      method: 'POST',
+      body: JSON.stringify({ roomId, timeControl: '5+0', whiteName: 'W', blackName: 'B' }),
+    });
+    expect(initRes.status).toBe(200);
+
+    await runInDurableObject(stub, async (instance, state) => {
+      const internal = instance as unknown as {
+        room: { cleanupAt: number | null } | null;
+      };
+      expect(internal.room).not.toBeNull();
+      internal.room!.cleanupAt = Date.now() - 1_000;
+      state.storage.sql.exec(
+        'INSERT OR REPLACE INTO room_kv (id, payload) VALUES (1, ?)',
+        JSON.stringify(internal.room),
+      );
+    });
+
+    const ran = await runDurableObjectAlarm(stub);
+    expect(ran).toBe(true);
+
+    const statusRes = await stub.fetch('https://internal/status');
+    expect(statusRes.status).toBe(404);
+  });
 });

@@ -22,6 +22,7 @@ export class MultiplayerSession implements GameSession {
   private reconnectAttempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
+  private terminalError = false;
   private moveSeq = 0;
   private recordedGameEnd = false;
   private state: GameSessionState;
@@ -66,7 +67,7 @@ export class MultiplayerSession implements GameSession {
   }
 
   private connect(): void {
-    if (this.disposed) return;
+    if (this.disposed || this.terminalError) return;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -106,8 +107,12 @@ export class MultiplayerSession implements GameSession {
       this.handleMessage(msg);
     };
 
-    ws.onclose = () => {
-      if (this.ws !== ws || this.disposed) return;
+    ws.onclose = (ev) => {
+      if (this.ws !== ws || this.disposed || this.terminalError) return;
+      if (ev?.code === 1000 && ev?.reason === 'Room expired') {
+        this.stopReconnecting('Room expired');
+        return;
+      }
       this.scheduleReconnect();
     };
 
@@ -116,8 +121,22 @@ export class MultiplayerSession implements GameSession {
     };
   }
 
+  private stopReconnecting(message: string): void {
+    this.terminalError = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.state = {
+      ...this.state,
+      connectionStatus: 'error',
+      errorMessage: message,
+    };
+    this.emit();
+  }
+
   private scheduleReconnect(): void {
-    if (this.disposed) return;
+    if (this.disposed || this.terminalError) return;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     const base = Math.min(10_000, 500 * 2 ** this.reconnectAttempt);
     const jitter = Math.floor(Math.random() * 250);
@@ -224,6 +243,22 @@ export class MultiplayerSession implements GameSession {
         break;
 
       case 'error':
+        if (msg.code === 'ROOM_NOT_FOUND') {
+          this.terminalError = true;
+          if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+          }
+          this.state = {
+            ...this.state,
+            fen: msg.revertFen ?? this.state.fen,
+            connectionStatus: 'error',
+            errorMessage: msg.message,
+          };
+          this.emit();
+          this.ws?.close(1000, 'Room not found');
+          return;
+        }
         this.state = {
           ...this.state,
           fen: msg.revertFen ?? this.state.fen,

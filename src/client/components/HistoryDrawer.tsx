@@ -61,7 +61,7 @@ export function HistoryDrawer({ open, games, onClose, onSelectGame }: HistoryDra
                     : 'Loss';
               const badgeClasses =
                 outcome === 'Win'
-                  ? 'bg-[var(--success)] text-white'
+                  ? 'bg-[var(--success)] text-[var(--accent-contrast)]'
                   : outcome === 'Loss'
                     ? 'bg-[var(--danger)] text-white'
                     : 'bg-[var(--bg-surface)] text-[var(--text-secondary)]';
@@ -94,7 +94,7 @@ export function HistoryDrawer({ open, games, onClose, onSelectGame }: HistoryDra
                   <button
                     type="button"
                     aria-label="Copy PGN"
-                    onClick={() => void navigator.clipboard.writeText(g.pgn)}
+                    onClick={() => void navigator.clipboard.writeText(g.pgn).catch(() => {})}
                     className="min-h-[44px] min-w-[44px] rounded-md hover:bg-[var(--bg-surface)] flex items-center justify-center cursor-pointer"
                   >
                     <Copy className="w-4 h-4" strokeWidth={1.75} aria-hidden="true" />

@@ -24,7 +24,12 @@ export class MatchmakerDO extends DurableObject<Env> {
     }
 
     const url = new URL(request.url);
-    const tcRaw = decodeURIComponent(url.pathname.split('/').pop() ?? '');
+    let tcRaw: string;
+    try {
+      tcRaw = decodeURIComponent(url.pathname.split('/').pop() ?? '');
+    } catch {
+      return new Response('Invalid time control', { status: 400 });
+    }
     if (!isTimeControlId(tcRaw)) {
       return new Response('Invalid time control', { status: 400 });
     }

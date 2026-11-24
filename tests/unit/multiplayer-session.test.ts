@@ -15,7 +15,7 @@ class FakeWebSocket {
   public sent: string[] = [];
   public onopen: (() => void) | null = null;
   public onmessage: ((ev: { data: string }) => void) | null = null;
-  public onclose: (() => void) | null = null;
+  public onclose: ((ev?: { code: number; reason: string }) => void) | null = null;
   public onerror: (() => void) | null = null;
 
   constructor(public readonly url: string) {
@@ -39,9 +39,9 @@ class FakeWebSocket {
     this.onmessage?.({ data: JSON.stringify(msg) });
   }
 
-  drop(): void {
+  drop(code = 1006, reason = ''): void {
     this.readyState = FakeWebSocket.CLOSED;
-    this.onclose?.();
+    this.onclose?.({ code, reason });
   }
 }
 
@@ -205,6 +205,45 @@ describe('MultiplayerSession', () => {
       serverNow: Date.now(),
     });
     expect(onGameEnd).toHaveBeenCalledTimes(2);
+
+    session.dispose();
+  });
+
+  it('does not schedule reconnect after ROOM_NOT_FOUND error', () => {
+    vi.useFakeTimers();
+    const session = new MultiplayerSession({ roomId: 'RM4040', playerName: 'Ada' });
+    session.start();
+
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    const ws = FakeWebSocket.instances[0];
+    ws.open();
+    ws.receive({ type: 'error', code: 'ROOM_NOT_FOUND', message: 'Room does not exist' });
+    ws.drop(1000, 'Room not found');
+
+    expect(session.getState().connectionStatus).toBe('error');
+    expect(session.getState().errorMessage).toBe('Room does not exist');
+
+    vi.advanceTimersByTime(30_000);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+
+    session.dispose();
+  });
+
+  it('does not schedule reconnect when server closes with 1000 Room expired', () => {
+    vi.useFakeTimers();
+    const session = new MultiplayerSession({ roomId: 'RMEXP1', playerName: 'Ada' });
+    session.start();
+
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    const ws = FakeWebSocket.instances[0];
+    ws.open();
+    ws.drop(1000, 'Room expired');
+
+    expect(session.getState().connectionStatus).toBe('error');
+    expect(session.getState().errorMessage).toBe('Room expired');
+
+    vi.advanceTimersByTime(30_000);
+    expect(FakeWebSocket.instances).toHaveLength(1);
 
     session.dispose();
   });
