@@ -12,7 +12,7 @@ import { MoveList } from './components/MoveList';
 import { StockfishWorkerEngine, type AiDifficultyId } from './engine/stockfish';
 import { LocalAISession } from './session/local-ai';
 import { MultiplayerSession } from './session/multiplayer';
-import type { GameSessionState } from './session/types';
+import type { GameSession, GameSessionState } from './session/types';
 import {
   appendHistory,
   loadHistory,
@@ -181,25 +181,29 @@ export function App() {
     setHistory(appendHistory(saved));
   }, []);
 
-  const activeSession = useMemo(() => {
+  const createSession = useMemo<(() => GameSession) | null>(() => {
     if (route.kind === 'room') {
-      return new MultiplayerSession({
-        roomId: route.roomId,
-        playerName: nicknameRef.current,
-        onGameEnd: handleGameEnd,
-      });
+      const { roomId } = route;
+      return () =>
+        new MultiplayerSession({
+          roomId,
+          playerName: nicknameRef.current,
+          onGameEnd: handleGameEnd,
+        });
     }
     if (route.kind === 'solo') {
-      return new LocalAISession(
-        {
-          playerName: nicknameRef.current,
-          playerColor: route.side,
-          difficulty: route.difficulty,
-          timeControl: route.timeControl,
-          onGameEnd: handleGameEnd,
-        },
-        new StockfishWorkerEngine(),
-      );
+      const { side, difficulty, timeControl } = route;
+      return () =>
+        new LocalAISession(
+          {
+            playerName: nicknameRef.current,
+            playerColor: side,
+            difficulty,
+            timeControl,
+            onGameEnd: handleGameEnd,
+          },
+          new StockfishWorkerEngine(),
+        );
     }
     return null;
   }, [route, handleGameEnd]);
@@ -225,10 +229,10 @@ export function App() {
         />
       )}
 
-      {activeSession && (route.kind === 'room' || route.kind === 'solo') && (
+      {createSession && (route.kind === 'room' || route.kind === 'solo') && (
         <MatchArena
           key={route.kind === 'room' ? route.roomId : `solo-${route.key}`}
-          session={activeSession}
+          createSession={createSession}
           soundEnabled={prefs.soundEnabled}
           onToggleSound={() => updatePrefs({ soundEnabled: !prefs.soundEnabled })}
           onReturnLobby={navigateLobby}

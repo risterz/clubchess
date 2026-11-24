@@ -1,5 +1,5 @@
 import { Crown, History, Moon, Palette, Sun, User } from 'lucide-react';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { BoardTheme, UserPrefs } from '../storage/local-store';
 
 const BOARD_THEMES: Array<{ id: BoardTheme; label: string }> = [
@@ -25,12 +25,23 @@ export function Header({
 }: HeaderProps) {
   const [editingName, setEditingName] = useState(false);
   const [draftName, setDraftName] = useState(prefs.nickname);
+  const cancelingRef = useRef(false);
 
   function commitName(): void {
+    if (cancelingRef.current) {
+      cancelingRef.current = false;
+      return;
+    }
     setEditingName(false);
     const cleaned = draftName.trim();
     if (cleaned) onUpdatePrefs({ nickname: cleaned });
     else setDraftName(prefs.nickname);
+  }
+
+  function cancelEdit(): void {
+    cancelingRef.current = true;
+    setDraftName(prefs.nickname);
+    setEditingName(false);
   }
 
   return (
@@ -63,6 +74,12 @@ export function Header({
                 maxLength={24}
                 value={draftName}
                 onChange={(e) => setDraftName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') {
+                    e.preventDefault();
+                    cancelEdit();
+                  }
+                }}
                 onBlur={commitName}
                 className="min-h-[44px] w-32 sm:w-40 px-2.5 rounded-md bg-[var(--bg-elevated)] border border-[var(--accent-primary)] text-sm text-[var(--text-primary)]"
               />
@@ -71,6 +88,7 @@ export function Header({
             <button
               type="button"
               onClick={() => {
+                cancelingRef.current = false;
                 setDraftName(prefs.nickname);
                 setEditingName(true);
               }}

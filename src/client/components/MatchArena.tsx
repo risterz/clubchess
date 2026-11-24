@@ -2,7 +2,7 @@ import { Chess } from 'chess.js';
 import { Check, Copy, Link2, RefreshCw, WifiOff } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { computeRemainingMs } from '../../shared/clock';
-import type { Color } from '../../shared/protocol';
+import type { Color, MoveRecord } from '../../shared/protocol';
 import { playSound } from '../audio/sound-engine';
 import type { GameSession, GameSessionState } from '../session/types';
 import { ActionBar } from './ActionBar';
@@ -13,6 +13,7 @@ import { PlayerBar } from './PlayerBar';
 
 const PIECE_VALUES: Record<string, number> = { p: 1, n: 3, b: 3, r: 5, q: 9 };
 const STARTING_FEN = new Chess().fen();
+const EMPTY_MOVES: MoveRecord[] = [];
 
 function computeMaterialDiff(fen: string): { w: number; b: number } {
   const chess = new Chess(fen);
@@ -29,29 +30,37 @@ function computeMaterialDiff(fen: string): { w: number; b: number } {
 }
 
 export interface MatchArenaProps {
-  session: GameSession;
+  createSession: () => GameSession;
   soundEnabled: boolean;
   onToggleSound: () => void;
   onReturnLobby: () => void;
 }
 
 export function MatchArena({
-  session,
+  createSession,
   soundEnabled,
   onToggleSound,
   onReturnLobby,
 }: MatchArenaProps) {
-  const [state, setState] = useState<GameSessionState>(() => session.getState());
+  const sessionRef = useRef<GameSession | null>(null);
+  const [state, setState] = useState<GameSessionState | null>(null);
   const [flipped, setFlipped] = useState(false);
   const [viewPly, setViewPly] = useState(0);
   const [dismissedModal, setDismissedModal] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
-  const prevMovesLen = useRef(state.moves.length);
-  const prevStatus = useRef(state.status);
+  const prevMovesLen = useRef(0);
+  const prevStatus = useRef<GameSessionState['status']>('waiting');
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
+    const session = createSession();
+    sessionRef.current = session;
+    const initial = session.getState();
+    prevMovesLen.current = initial.moves.length;
+    prevStatus.current = initial.status;
+    setViewPly(initial.moves.length);
+    setState(initial);
     const unsub = session.subscribe((next) => {
       setState(next);
     });
@@ -59,8 +68,11 @@ export function MatchArena({
     return () => {
       unsub();
       session.dispose();
+      if (sessionRef.current === session) {
+        sessionRef.current = null;
+      }
     };
-  }, [session]);
+  }, [createSession]);
 
   useEffect(() => {
     return () => {
@@ -78,6 +90,7 @@ export function MatchArena({
 
   // Follow live ply unless user is inspecting history, and play sound cues on new moves / game end
   useEffect(() => {
+    if (!state) return;
     if (state.moves.length !== prevMovesLen.current) {
       if (viewPly === prevMovesLen.current || state.moves.length === 0) {
         setViewPly(state.moves.length);
@@ -101,25 +114,33 @@ export function MatchArena({
       setViewPly(0);
     }
     prevStatus.current = state.status;
-  }, [state.moves, state.status, soundEnabled, viewPly]);
+  }, [state, soundEnabled, viewPly]);
+
+  const moves = state?.moves ?? EMPTY_MOVES;
+  const fen = state?.fen ?? STARTING_FEN;
+  const isLiveView = viewPly === moves.length;
+  const displayedFen = isLiveView
+    ? fen
+    : viewPly === 0
+      ? STARTING_FEN
+      : moves[viewPly - 1]?.fen ?? fen;
+  const displayedLastMove = useMemo(() => {
+    const rec = viewPly > 0 ? moves[viewPly - 1] : null;
+    return rec ? { from: rec.uci.slice(0, 2), to: rec.uci.slice(2, 4) } : null;
+  }, [moves, viewPly]);
+
+  const activeTurn = useMemo(() => new Chess(fen).turn() as Color, [fen]);
+  const material = useMemo(() => computeMaterialDiff(displayedFen), [displayedFen]);
+
+  if (!state) return null;
 
   const baseOrientation: Color = state.yourRole === 'b' ? 'b' : 'w';
   const orientation: Color = flipped ? (baseOrientation === 'w' ? 'b' : 'w') : baseOrientation;
   const topColor: Color = orientation === 'w' ? 'b' : 'w';
   const bottomColor: Color = orientation;
 
-  const isLiveView = viewPly === state.moves.length;
-  const displayedFen =
-    viewPly === 0 ? STARTING_FEN : state.moves[viewPly - 1]?.fen ?? state.fen;
-  const displayedLastMove = useMemo(() => {
-    const rec = viewPly > 0 ? state.moves[viewPly - 1] : null;
-    return rec ? { from: rec.uci.slice(0, 2), to: rec.uci.slice(2, 4) } : null;
-  }, [state.moves, viewPly]);
-
-  const activeTurn = useMemo(() => new Chess(state.fen).turn() as Color, [state.fen]);
   const serverNowEst = nowMs + state.clockOffsetMs;
   const liveClocks = computeRemainingMs(state.clocks, activeTurn, serverNowEst);
-  const material = useMemo(() => computeMaterialDiff(displayedFen), [displayedFen]);
 
   const oppColor: Color | null = state.yourRole === 'w' ? 'b' : state.yourRole === 'b' ? 'w' : null;
   const oppPlayer = oppColor ? state.players[oppColor] : null;
@@ -132,8 +153,10 @@ export function MatchArena({
       serverNowEst >= oppPlayer.graceDeadlineAt,
   );
 
+  const { players } = state;
+
   function graceSecFor(color: Color): number | null {
-    const p = state.players[color];
+    const p = players[color];
     if (!p || p.online || !p.graceDeadlineAt) return null;
     return Math.ceil((p.graceDeadlineAt - serverNowEst) / 1000);
   }
@@ -198,7 +221,7 @@ export function MatchArena({
           {state.mode === 'solo' && (
             <button
               type="button"
-              onClick={() => session.retryAi()}
+              onClick={() => sessionRef.current?.retryAi()}
               className="min-h-[44px] min-w-[44px] px-3 rounded bg-[var(--danger)] text-white text-xs font-semibold flex items-center gap-1 cursor-pointer"
             >
               <RefreshCw className="w-3.5 h-3.5" strokeWidth={1.75} aria-hidden="true" /> Retry
@@ -229,7 +252,7 @@ export function MatchArena({
             allowedColor={state.yourRole === 'spectator' ? null : state.yourRole}
             lastMove={displayedLastMove}
             onMove={(from, to, promo) => {
-              session.makeMove(from, to, promo);
+              sessionRef.current?.makeMove(from, to, promo);
             }}
             ariaAnnouncement={announcement}
           />
@@ -271,12 +294,12 @@ export function MatchArena({
             drawOfferBy={state.drawOfferBy}
             canClaimAbandonment={canClaimAbandonment}
             soundEnabled={soundEnabled}
-            onOfferDraw={() => session.offerDraw()}
-            onRespondDraw={(accept) => session.respondDraw(accept)}
-            onResign={() => session.resign()}
-            onClaimAbandonment={() => session.claimAbandonment()}
+            onOfferDraw={() => sessionRef.current?.offerDraw()}
+            onRespondDraw={(accept) => sessionRef.current?.respondDraw(accept)}
+            onResign={() => sessionRef.current?.resign()}
+            onClaimAbandonment={() => sessionRef.current?.claimAbandonment()}
             onFlip={() => setFlipped((f) => !f)}
-            onCopyPgn={() => void navigator.clipboard.writeText(session.getPgn())}
+            onCopyPgn={() => void navigator.clipboard.writeText(sessionRef.current?.getPgn() ?? '')}
             onCopyFen={() => void navigator.clipboard.writeText(displayedFen)}
             onToggleSound={onToggleSound}
           />
@@ -302,10 +325,10 @@ export function MatchArena({
           mode={state.mode}
           yourRole={state.yourRole}
           rematchBy={state.rematchBy}
-          onRematch={() => session.requestRematch()}
+          onRematch={() => sessionRef.current?.requestRematch()}
           onNewGame={onReturnLobby}
           onReview={() => setDismissedModal(true)}
-          onCopyPgn={() => void navigator.clipboard.writeText(session.getPgn())}
+          onCopyPgn={() => void navigator.clipboard.writeText(sessionRef.current?.getPgn() ?? '')}
         />
       )}
     </main>
